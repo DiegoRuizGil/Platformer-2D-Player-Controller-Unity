@@ -10,6 +10,8 @@ public class PlayerController : MonoBehaviour
     public CapsuleCollider2D cc2D;
     public Transform groundCheck;
     public LayerMask groundLayer;
+    public Transform cornerDetectionLeft;
+    public Transform cornerDetectionRight;
 
     [Header("Movement configuration")]
     [Range(0, 100)] public float maxSpeed;
@@ -19,6 +21,10 @@ public class PlayerController : MonoBehaviour
     [Range(0, 20)] public float maxJumpHeight;
     public float jumpBufferTime = 0.2f;
     public float coyoteTime = 0.25f;
+    public float fallMultiplier = 2.5f;
+    public float lowJumpMultiplier = 2f;
+    [Range(0, 1)] public float cornerDetectionDistance = 0.2f;
+    [Range(0, 1)] public float cornerCorrectionOffset = 0.2f;
     public float groundCheckRadius;
 
     // Movement
@@ -29,29 +35,38 @@ public class PlayerController : MonoBehaviour
     // Jump
     private Queue<string> _jumpBuffer;
     private const string JUMP_ACTION = "JUMP";
+    private float _coyoteTimer;
+    [SerializeField] private bool _higherJump;
 
     void Start()
     {
         _horizontalMovementTimer = 0f;
-
         _jumpBuffer = new Queue<string>();
     }
 
     void Update()
     {
         _grounded = Physics2D.OverlapCircle(groundCheck.position, groundCheckRadius, groundLayer);
+        if (_grounded)
+        {
+            _coyoteTimer = coyoteTime;
+        }
+        else
+        {
+            _coyoteTimer -= Time.deltaTime;
+        }
+            
     }
 
     private void FixedUpdate()
     {
+        ImproveGravity();
+
         Movement();
 
-        if (_grounded && _jumpBuffer.Count > 0)
-        {
-            Jump();
-            CancelInvoke(nameof(DequeueJumpAction));
-            _jumpBuffer.Dequeue();
-        }
+        PerformJump();
+
+        CornerCorrection();
     }
 
     private void DequeueJumpAction()
@@ -63,7 +78,7 @@ public class PlayerController : MonoBehaviour
     // ------------- MOVEMENT -------------
     public void MovementInput(InputAction.CallbackContext value)
     {
-        _movement = new Vector2(value.ReadValue<Vector2>().x, value.ReadValue<Vector2>().y);
+        _movement = value.ReadValue<Vector2>();
         _horizontalMovementTimer = 0f;
     }
 
@@ -103,10 +118,15 @@ public class PlayerController : MonoBehaviour
 
     public void JumpInput(InputAction.CallbackContext value)
     {
-        if (value.phase == InputActionPhase.Started)
+        if (value.phase == InputActionPhase.Started) // .phase == InputActionPhase.Started
         {
             _jumpBuffer.Enqueue(JUMP_ACTION);
             Invoke(nameof(DequeueJumpAction), jumpBufferTime);
+            _higherJump = true;
+        }
+        else if(value.phase == InputActionPhase.Canceled)
+        {
+            _higherJump = false;
         }
     }
 
@@ -120,6 +140,64 @@ public class PlayerController : MonoBehaviour
         float verticalSpeed = -1f * gravity * maxHeightTime;
 
         rb2D.velocity = new Vector2(rb2D.velocity.x, verticalSpeed);
-        _grounded = false;
+    }
+
+    private void PerformJump()
+    {
+        if (_jumpBuffer.Count == 0)
+            return;
+
+        if (_coyoteTimer > 0f)
+        {
+            Jump();
+            _jumpBuffer.Dequeue();
+            _coyoteTimer = 0f;
+            _grounded = false;
+        }
+    }
+
+    private void ImproveGravity()
+    {
+        // falling
+        if (rb2D.velocity.y < 0.1f)
+        {
+            rb2D.gravityScale = fallMultiplier;
+        }
+        // short jump
+        else if (!_higherJump)
+        {
+            rb2D.gravityScale = lowJumpMultiplier;
+        }
+        else
+        {
+            rb2D.gravityScale = 1f;
+        }
+    }
+
+    private void CornerCorrection()
+    {
+        if (cornerDetectionLeft == null || cornerDetectionRight == null)
+            return;
+
+        RaycastHit2D leftRay = Physics2D.Raycast(cornerDetectionLeft.position, Vector2.up, cornerDetectionDistance, groundLayer);
+        RaycastHit2D rightRay = Physics2D.Raycast(cornerDetectionRight.position, Vector2.up, cornerDetectionDistance, groundLayer);
+
+        Debug.DrawLine(cornerDetectionLeft.position,
+            cornerDetectionLeft.position + new Vector3(0f, cornerDetectionDistance, 0f),
+            leftRay ? Color.red : Color.blue);
+        Debug.DrawLine(cornerDetectionRight.position,
+            cornerDetectionRight.position + new Vector3(0f, cornerDetectionDistance, 0f),
+            rightRay ? Color.red : Color.blue);
+
+        if (leftRay && !rightRay)
+        {
+            Debug.Log("Desplazamos hacia la derecha");
+            this.transform.position += new Vector3(cornerCorrectionOffset, 0f, 0f);
+        }
+        else if (!leftRay && rightRay)
+        {
+            Debug.Log("Desplazamos hacia la izquierda");
+            this.transform.position -= new Vector3(cornerCorrectionOffset, 0f, 0f);
+        }
     }
 }
