@@ -8,6 +8,7 @@ public class PlayerController : MonoBehaviour
     [Header("Dependencies")]
     public Rigidbody2D rb2D;
     public CapsuleCollider2D cc2D;
+    public CircleCollider2D hitBox;
     public Transform groundCheck;
     public LayerMask groundLayer;
     public Transform cornerDetectionLeft;
@@ -15,11 +16,11 @@ public class PlayerController : MonoBehaviour
     public PhysicsMaterial2D noFrictionMaterial;
     public PhysicsMaterial2D fullFrictionMaterial;
 
-    [Header("Movement configuration")]
+    [Header("Movement Configuration")]
     [Range(0, 100)] public float maxSpeed;
     [Range(0, 100)] public float maxAceleration;
 
-    [Header("Jump configuration")]
+    [Header("Jump Configuration")]
     [Range(0, 20)] public float maxJumpHeight;
     public float jumpBufferTime = 0.2f;
     public float coyoteTime = 0.25f;
@@ -29,11 +30,18 @@ public class PlayerController : MonoBehaviour
     [Range(0, 1)] public float cornerCorrectionOffset = 0.2f;
     public float groundCheckRadius;
 
-    [Header("Slopes configuration")]
+    [Header("Jump Attack Configuration")]
+    [Range(0, 20)] public float jumpAttackHeight;
+
+    [Header("Slopes Configuration")]
     public float slopeCheckDistance = 0.25f;
+
+    [Header("Knockback Configuration")]
+    public float kbSpeed;
 
     // Movement
     private Vector2 _movement;
+    private float _previousXInput = 0f;
     private bool _grounded;
     private float _horizontalMovementTimer;
 
@@ -41,11 +49,16 @@ public class PlayerController : MonoBehaviour
     private Queue<string> _jumpBuffer;
     private const string JUMP_ACTION = "JUMP";
     private float _coyoteTimer;
-    private bool _higherJump;
+    [SerializeField] private bool _higherJump;
+    private bool _isFalling;
 
     // Slopes
     private bool _isOnSlope;
     private Vector2 _slopeDirection;
+
+    // Knockback
+    private bool _knockback;
+    private float _kbTimer = 0f;
 
     void Start()
     {
@@ -56,6 +69,8 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        _isFalling = rb2D.velocity.y < -0.1f;
+
         _grounded = Physics2D.OverlapCircle(groundCheck.position, groundCheckRadius, groundLayer);
         if (_grounded)
         {
@@ -67,6 +82,8 @@ public class PlayerController : MonoBehaviour
         }
 
         CheckSlopes();
+
+        CheckKnockback();
     }
 
     private void FixedUpdate()
@@ -95,20 +112,34 @@ public class PlayerController : MonoBehaviour
 
     private void Movement()
     {
-        if (_movement == Vector2.zero && _grounded)
-        {
-            rb2D.velocity = Vector2.zero;
+        if (_knockback)
             return;
-        }
 
         float xSpeed = GetHorizontalSpeed();
-        float ySpeed = _grounded ? 0f : rb2D.velocity.y;
+        float ySpeed = rb2D.velocity.y;
 
-        if (_isOnSlope && _grounded)
+        if (_grounded)
         {
-            xSpeed = maxSpeed * _slopeDirection.x * _movement.x;
-            ySpeed = maxSpeed * _slopeDirection.y * _movement.x;
+
+            if (_isOnSlope)
+            {
+                xSpeed = maxSpeed * _slopeDirection.x * _movement.x;
+                ySpeed = maxSpeed * _slopeDirection.y * _movement.x;
+            }
+            else if(_movement == Vector2.zero)
+            {
+                xSpeed = 0f;
+                ySpeed = _isFalling ? 0f : ySpeed;
+            }
         }
+
+        // Switching fast between the left and right direction makes the movement.x never get zero value
+        if (_previousXInput != _movement.x)
+        {
+            _previousXInput = _movement.x;
+            xSpeed = 0f;
+        }
+            
 
         rb2D.velocity = new Vector2(xSpeed, ySpeed);
     }
@@ -147,26 +178,35 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    private void Jump()
+    private void Jump(float maxHeight)
     {
         // g = -2*h/t_h^2
         // v = -g*t_h
 
         float gravity = Physics2D.gravity.y;
-        float maxHeightTime = Mathf.Sqrt(-2f * maxJumpHeight / gravity);
+        float maxHeightTime = Mathf.Sqrt(-2f * maxHeight / gravity);
         float verticalSpeed = -1f * gravity * maxHeightTime;
 
         rb2D.velocity = new Vector2(rb2D.velocity.x, verticalSpeed);
     }
 
+    // Will be call from a listener
+    public void PerformJumpAfterAttack()
+    {
+        _higherJump = true;
+        Jump(jumpAttackHeight);
+    }
+
     private void PerformJump()
     {
+        if (_knockback)
+            return;
         if (_jumpBuffer.Count == 0)
             return;
 
         if (_coyoteTimer > 0f)
         {
-            Jump();
+            Jump(maxJumpHeight);
             _jumpBuffer.Dequeue();
             _coyoteTimer = 0f;
             _grounded = false;
@@ -254,5 +294,30 @@ public class PlayerController : MonoBehaviour
         }
 
         _isOnSlope = slopeAngle != 0f;
+    }
+
+    // ------------ KNOCKBACK -------------
+
+    public void ApplyKnockback(KnockbackInfo info)
+    {
+        _knockback = true;
+        rb2D.velocity = info.Direction.normalized * kbSpeed;
+        _kbTimer = 0f;
+        hitBox.enabled = false;
+    }
+
+    private void CheckKnockback()
+    {
+        if (!_knockback)
+            return;
+
+        _kbTimer += Time.deltaTime;
+        // Give time to first get the knockback, then check if grounded
+        if (_grounded && _knockback && _kbTimer > 0.1f)
+        {
+            _knockback = false;
+            _kbTimer = 0f;
+            hitBox.enabled = true;
+        } 
     }
 }
